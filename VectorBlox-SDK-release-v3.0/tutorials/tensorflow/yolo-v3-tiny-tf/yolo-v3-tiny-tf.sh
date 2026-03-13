@@ -1,0 +1,62 @@
+
+##########################################################
+#  _    __          __             ____  __              #
+# | |  / /__  _____/ /_____  _____/ __ )/ /___  _  __    #
+# | | / / _ \/ ___/ __/ __ \/ ___/ __  / / __ \| |/_/    #
+# | |/ /  __/ /__/ /_/ /_/ / /  / /_/ / / /_/ />  <      #
+# |___/\___/\___/\__/\____/_/  /_____/_/\____/_/|_|      #
+#                                                        #
+# https://github.com/Microchip-Vectorblox/VectorBlox-SDK #
+# v3.0                                                   #
+#                                                        #
+##########################################################
+
+set -e
+echo "Checking and activating VBX Python Environment..."
+if [ -z $VBX_SDK ]; then
+    echo "\$VBX_SDK not set. Please run 'source setup_vars.sh' from the SDK's root folder" && exit 1
+fi
+source $VBX_SDK/vbx_env/bin/activate
+
+echo "Checking for Numpy calibration data file..."
+if [ ! -f $VBX_SDK/tutorials/coco2017_rgb_20x416x416x3.npy ]; then
+    generate_npy $VBX_SDK/tutorials/coco2017_rgb_20x416x416x3.npy -o $VBX_SDK/tutorials/coco2017_rgb_20x416x416x3.npy -s 416 416 
+fi
+
+echo "Checking for yolo-v3-tiny-tf files..."
+
+# model details @ https://github.com/openvinotoolkit/open_model_zoo/tree/2021.4.2/models/public/yolo-v3-tiny-tf/
+[ -f coco.names ] || wget -q https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names
+if [ ! -f yolo-v3-tiny-tf.tflite ]; then
+   [ -f yolov3-tiny.weights ] || wget -q http://web.archive.org/web/20210225040312/https://pjreddie.com/media/files/yolov3-tiny.weights
+   omz_downloader --name yolo-v3-tiny-tf
+   rm -rf keras-YOLOv3-model-set && git clone https://github.com/david8862/keras-YOLOv3-model-set
+   cd keras-YOLOv3-model-set && git checkout 56bcc2e && cd ..
+   python keras-YOLOv3-model-set/tools/model_converter/convert.py keras-YOLOv3-model-set/cfg/yolov3-tiny.cfg yolov3-tiny.weights yolo-v3-tiny.h5
+fi
+
+
+
+if [ ! -f yolo-v3-tiny-tf.tflite ]; then
+   echo "Generating TF Lite..."
+   tflite_quantize yolo-v3-tiny.h5 yolo-v3-tiny-tf.tflite -d $VBX_SDK/tutorials/coco2017_rgb_20x416x416x3.npy \
+--scale 255. --shape 1 416 416 3
+fi
+
+if [ -f yolo-v3-tiny-tf.tflite ]; then
+   tflite_preprocess yolo-v3-tiny-tf.tflite  --scale 255
+fi
+
+if [ -f yolo-v3-tiny-tf.pre.tflite ]; then
+    echo "Generating VNNX for V1000 ncomp configuration..."
+    vnnx_compile -s V1000 -c ncomp -t yolo-v3-tiny-tf.pre.tflite  -o yolo-v3-tiny-tf_V1000_ncomp.vnnx
+fi
+
+if [ -f yolo-v3-tiny-tf_V1000_ncomp.vnnx ]; then
+    echo "Running Simulation..."
+    python $VBX_SDK/example/python/yoloInfer.py yolo-v3-tiny-tf_V1000_ncomp.vnnx $VBX_SDK/tutorials/test_images/dog.jpg -j yolo-v3-tiny-tf.json -v 3 -l coco.names 
+    echo "C Simulation Command:"
+    echo '$VBX_SDK/example/sim-c/sim-run-model yolo-v3-tiny-tf_V1000_ncomp.vnnx $VBX_SDK/tutorials/test_images/dog.jpg YOLOV3'
+fi
+
+deactivate

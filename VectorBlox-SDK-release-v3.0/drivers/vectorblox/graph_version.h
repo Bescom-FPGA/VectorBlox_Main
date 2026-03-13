@@ -1,0 +1,5 @@
+#ifndef GRAPH_VERSION_H_IN
+#define GRAPH_VERSION_H_IN
+#define VNNX_GRAPH_VERSION 0x54d0d1b4
+
+#endif //GRAPH_VERSION_H_IN

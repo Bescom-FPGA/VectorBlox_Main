@@ -1,0 +1,58 @@
+
+##########################################################
+#  _    __          __             ____  __              #
+# | |  / /__  _____/ /_____  _____/ __ )/ /___  _  __    #
+# | | / / _ \/ ___/ __/ __ \/ ___/ __  / / __ \| |/_/    #
+# | |/ /  __/ /__/ /_/ /_/ / /  / /_/ / / /_/ />  <      #
+# |___/\___/\___/\__/\____/_/  /_____/_/\____/_/|_|      #
+#                                                        #
+# https://github.com/Microchip-Vectorblox/VectorBlox-SDK #
+# v3.0                                                   #
+#                                                        #
+##########################################################
+
+set -e
+echo "Checking and activating VBX Python Environment..."
+if [ -z $VBX_SDK ]; then
+    echo "\$VBX_SDK not set. Please run 'source setup_vars.sh' from the SDK's root folder" && exit 1
+fi
+source $VBX_SDK/vbx_env/bin/activate
+
+echo "Checking for Numpy calibration data file..."
+if [ ! -f $VBX_SDK/tutorials/imagenetv2_rgb_norm_20x224x224x3.npy ]; then
+    generate_npy $VBX_SDK/tutorials/imagenetv2_rgb_20x224x224x3.npy -o $VBX_SDK/tutorials/imagenetv2_rgb_norm_20x224x224x3.npy -s 280 280  --norm 
+fi
+
+echo "Checking for efficientnet-lite3-int8 files..."
+
+# model details @ https://www.kaggle.com/models/google/efficientnet/tensorFlow1/b3-classification/1
+if [ ! -f efficientnet-lite3-int8.tflite ]; then
+    wget -q --no-check-certificate https://storage.googleapis.com/cloud-tpu-checkpoints/efficientnet/lite/efficientnet-lite3.tar.gz
+   tar -xzf efficientnet-lite3.tar.gz
+   cp efficientnet-lite3/efficientnet-lite3-int8.tflite .
+fi
+
+
+if [ -f efficientnet-lite3-int8.tflite ]; then 
+   echo "Cutting graph" 
+   tflite_cut efficientnet-lite3-int8.tflite -c 0 94
+   mv efficientnet-lite3-int8.1.tflite efficientnet-lite3-int8.cut.tflite 
+fi
+
+if [ -f efficientnet-lite3-int8.cut.tflite ]; then
+   tflite_preprocess efficientnet-lite3-int8.cut.tflite  --scale 255
+fi
+
+if [ -f efficientnet-lite3-int8.cut.pre.tflite ]; then
+    echo "Generating VNNX for V1000 ncomp configuration..."
+    vnnx_compile -s V1000 -c ncomp -t efficientnet-lite3-int8.cut.pre.tflite  -o efficientnet-lite3-int8_V1000_ncomp.vnnx
+fi
+
+if [ -f efficientnet-lite3-int8_V1000_ncomp.vnnx ]; then
+    echo "Running Simulation..."
+    python $VBX_SDK/example/python/classifier.py efficientnet-lite3-int8_V1000_ncomp.vnnx $VBX_SDK/tutorials/test_images/oreo.jpg 
+    echo "C Simulation Command:"
+    echo '$VBX_SDK/example/sim-c/sim-run-model efficientnet-lite3-int8_V1000_ncomp.vnnx $VBX_SDK/tutorials/test_images/oreo.jpg CLASSIFY'
+fi
+
+deactivate

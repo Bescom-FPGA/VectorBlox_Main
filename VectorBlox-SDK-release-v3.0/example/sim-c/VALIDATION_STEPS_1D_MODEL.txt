@@ -1,0 +1,77 @@
+VBX 1D 이상탐지 파이프라인: 단계별 검증 가이드
+
+목표
+  - “어디에서 문제인지”를 단계별로 분리해서 확인
+  - (학습/변환/컴파일/런타임/입력스케일/후처리) 중 어느 단계가 원인인지 빠르게 특정
+
+전제(현재 프로젝트 기준)
+  - 입력: (1,1,1,256)
+  - 데이터 전처리: minmax(0~1) 저장 후 uint8(0~255)로 매핑
+    - /home/ljw/AIEngines/CNN_exam/bearing_vbx/norm_params.json 참고
+  - sim 실행: /home/ljw/VBX_SDK/VectorBlox-SDK-release-v3.0/example/sim-c/sim-1D-model
+
+
+1) 데이터(X/y) 단계 검증 (전처리/라벨 확인)
+  - X.npy/y.npy shape 확인:
+      X: (N,1,1,256)  float32
+      y: (N,)         int (0=정상, 1=이상)
+  - 클래스 분포 확인(정상/이상 비율):
+      정상만 과도하게 많으면 “항상 0 예측” 모델로 수렴하기 쉬움
+  - 값 범위 확인:
+      minmax라면 X는 대체로 0~1, uint8 변환 시 X_uint8 = clip(X*255)
+
+
+2) PyTorch 학습 단계 검증 (모델이 ‘학습에서’ 이상을 구분하는지)
+  - 학습/검증에서 confusion matrix를 반드시 확인:
+      - pred가 0만 나오는지, 1도 예측하는지
+  - 검증 셋에서 “y=1인데 pred=0”가 전부면:
+      - 라벨링 문제, 데이터 불균형, 모델 용량 부족, 학습 실패 가능성 큼
+
+
+3) ONNX 단계 검증 (export가 의도한 그래프인지)
+  - 입력/출력 shape 고정 여부 확인
+  - Flatten/Reshape가 VBX 컴파일러가 싫어하는 형태로 들어갔는지 확인
+  - (권장) GAP/Flatten 등 구조 변경 후에는 반드시 ONNX를 새로 생성
+
+
+4) TFLite(양자화) 단계 검증 (입력 quant 파라미터/스케일)
+  - “학습 입력 스케일”과 “런타임 입력 스케일”이 일치해야 함
+  - uint8 입력을 쓰는 경우:
+      - 앱(또는 preprocess)에서 (0~1 float) -> (0~255 uint8)로 동일하게 넣었는지
+  - tflite_preprocess 사용 시:
+      - mean=0일 때 일부 버그/제약이 있어, 필요하면 mean을 주지 않고 scale만 적용 등 우회
+
+
+5) VNNX 컴파일 단계 검증
+  - vnnx_compile이 성공해야 다음 단계로 진행 가능
+  - 실패 시(특히 RESHAPE 관련 assert):
+      - 그래프에 “복잡한 Reshape/Flatten”이 남아있는지 점검
+      - 구조 단순화(GAP 등) 또는 preprocess를 빼는 방식 등을 검토
+
+
+6) sim-1D-model 단일 샘플 검증 (입력/출력/체크섬)
+  - 실행:
+      ./sim-1D-model MODEL.vnnx sample.bin
+  - 기대:
+      - Input shape/bytes 출력
+      - 2-class이면 Class0/1 점수와 Predicted 출력
+      - CHECKSUM 출력(재현성 확인용)
+  - “Class1이 절대 안 나오는지”를 정상/이상 샘플 각각으로 확인
+
+
+7) 전체 데이터 정확도 검증 (대용량: tmp.bin 덮어쓰기 방식)
+  - 생성 스크립트(호스트에서 반복 실행):
+      /home/ljw/AIEngines/CNN_exam/eval_sim_1d.py
+  - 특징:
+      - X.npy는 mmap으로 읽어서 RAM 폭발 방지
+      - 임시 tmp.bin 하나만 계속 덮어씀 (bin 수천개 생성 X)
+  - 결과:
+      - accuracy + confusion matrix
+      - eval_sim_1d.csv에 인덱스별 예측/점수 저장
+
+
+문제 패턴 빠른 해석
+  - confusion matrix에서 pred1이 0:
+      “모델이 이상을 한 번도 예측하지 못함”
+      -> 학습 단계부터 그랬는지(2단계) 확인이 최우선
+
